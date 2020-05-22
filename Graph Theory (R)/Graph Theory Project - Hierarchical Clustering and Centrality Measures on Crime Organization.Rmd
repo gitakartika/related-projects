@@ -1,0 +1,371 @@
+---
+title: "Hierarchical Clustering and Centrality Measures on Crime Organization Graph"
+author: "Brenda Mutiara Samiadji, Faathir Chikal Asyuraa, Gita Kartika Suriah"
+date: "11/30/2019"
+output: 
+  html_document:
+    toc_depth: 3  # upto three depths of headings (specified by #, ## and ###)
+    toc: true
+    toc_float: true
+    number_sections: true  ## if you want number sections at each table header
+    theme: united  # many options for theme, this one is my favorite.
+    highlight: tango  # specifies the syntax highlighting style
+    df_print: paged
+    fig_width: 10
+    fig_height: 6
+    fig_caption: True
+---
+
+# Introduction
+
+## About this project
+
+On this project the author and his team has gathered data on international crime organizations from Wikipedia.org, and represent the data in a graph format, with the nodes are the organization, and an edge means that there are connection between two organizations, it is weighted according to how much they have same criminal activites and whether they work on the same area or not
+
+The data consist of 154 nodes and 288 edges
+
+## Libraries used
+
+```{r message=FALSE, warning=FALSE}
+library(readr) # Reading datafile
+library(readxl) # Reading excel
+library(igraph) # Core graph package
+library(tidyverse) # Data mungings
+library(ggraph) # Graph Visualization
+library(ggdendro) # Dendogram Visualization of hierarchical clustering
+library(dendextend) # Additional extension on the dendogram visualization
+library(visNetwork) # Interactive Visualization on graph
+```
+
+# Data Exploration & Preprocessing
+
+## Reading the data 
+
+```{r message=FALSE, warning=FALSE}
+# Read the nodes file into the variable nodes
+nodes <- read_excel('Graph Theory Project - Hierarchical Clustering and Centrality Measures on Crime Organization Nodes.xlsx')
+
+# Read the ties file into the variable ties
+ties <- read_excel('Graph Theory Project - Hierarchical Clustering and Centrality Measures on Crime Organization Edges.xlsx')
+```
+
+## Take a quick look at the graph dataframe
+
+```{r message=FALSE, warning=FALSE}
+# Print nodes
+nodes
+
+# Print ties
+ties
+```
+
+## Converting the dataframe into a graph object
+
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+# Make the network from the data frame ties and print it
+g <- graph_from_data_frame(ties, 
+                           directed = FALSE, 
+                           vertices = nodes)
+
+# Explore the set of nodes
+head(V(g))
+
+vcount(g)
+
+# Explore the set of ties
+head(E(g))
+
+ecount(g)
+```
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+# Give the name "Cartels" to the network 
+g$name <- "Cartels"
+
+# Add node attribute id and print the node `id` attribute
+V(g)$id <- 1:vcount(g)
+
+# Print the tie `weight` attribute
+head(E(g)$weight)
+```
+
+# Centrality Measures
+
+## Assigning proper weight on edges for calculating distances between to vertex
+In our data, larger weight measure how much two organization do the same criminal activities and done their criminal activities in the same area.
+
+In many graph algrotihm, edge weight are treated like ‘cost’ to cross that edge, meaning that larger value are more costly to cross
+
+But in our data, larger weight value means stronger bond
+
+So, to tackle that, we take the inverse of our weight so it is still use the same principle that ‘the smaller the (inverse of) weight (means stronger bonds), the less it cost to get information across’
+
+```{r message=FALSE, warning=FALSE}
+# Calculate the reciprocal of the tie weights
+dist_weight <- 1 / E(g)$weight
+```
+
+## Creating centrality measures
+we’ll start with degree
+
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+nodes_with_centrality <- nodes %>%
+  # Add a column containing the degree of each node
+  mutate(degree = degree(g)) %>%
+  # Arrange rows by descending degree
+  arrange(desc(degree))
+# See the result
+nodes_with_centrality
+```
+
+## Adding vertex betweenness and closeness
+
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+nodes_with_centrality <- nodes %>%
+  mutate(
+    degree = degree(g),
+    # Add a column containing the strength of each node
+    strength = strength(g),
+    # Betweenness
+    betweenness = betweenness(g,weights = dist_weight),
+    # Closeness
+    closeness = closeness(g,weights = dist_weight)
+  ) %>%
+  # Arrange rows by descending strength
+  arrange(desc(betweenness))
+
+# Adding the strength, degree, and closeness on nodes data
+nodes$degree <- degree(g)
+nodes$strength <- strength(g)
+nodes$closeness <- closeness(g,weights = dist_weight)
+
+# See the result
+nodes_with_centrality
+```
+
+## Creating histograms of centrality measures on a vertex
+
+```{r message=FALSE, warning=FALSE}
+nodes_with_centrality %>% 
+  ggplot(aes(x = degree))+ 
+  geom_histogram()+
+  ggtitle('Histogram of Degree')
+
+nodes_with_centrality %>% 
+  ggplot(aes(x = strength))+
+  geom_histogram()+
+  ggtitle('Histogram of Strength')
+
+nodes_with_centrality %>%
+  ggplot(aes(x = closeness))+
+  geom_histogram()+
+  ggtitle('Histogram of Closeness')
+
+nodes_with_centrality %>%
+  ggplot(aes(x=betweenness))+
+  geom_histogram()+
+  ggtitle('Histogram of Vertex Betweenness')
+```
+
+## Edge betweenness
+
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+ties_with_betweenness <- ties %>%
+  # Add an edge betweenness column weighted by dist_weight
+  mutate(betweenness = edge_betweenness(g, weights = dist_weight))
+
+# Review updated ties
+ties_with_betweenness
+```
+
+# Distance Matrix
+
+## Creating distance matrix
+here we’ll create a similarity matrix, made from spearman correlation from the adjacency matrix
+
+(I actually tried several distance matrix like euclidean, manhattan, minkowski, but the following dendogram and the visualization in the end didn’t look to good. as of why the particular similarity measure is chosen, i didn’t delve much further. So my recommendation for future analysis, try to explore another distance measure, and select the appropriate one for dealing with adjacency matrix)
+
+(Why spearman? spearman are non-parametric, so it does not assume much like pearson correlation [normality of the data])
+
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+# Get the weighted adjacency matrix
+A <- as_adjacency_matrix(g, attr = "weight", names = FALSE)
+
+# convert it as a matrix
+A <- as.matrix(A)
+# Compute the Spearman correlation matrix of A
+S <- cor(A,method="spearman")
+## Warning in cor(A, method = "spearman"): the standard deviation is zero
+# Assign the diagonal to zero
+diag(S) <- 0
+```
+
+## Create a ‘distance’ matrix
+
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+D <- 1 - S
+# Some of the nodes are not connected, so if there are any NAs, we'll replace it with 1 (very far)
+D[is.na(D)] <- 1
+
+# Obtain a distance object 
+d <- as.dist(D)
+```
+
+# Hierarchical Clustering
+
+## Run the Hierarchical Clustering with the provided distance object
+
+for the selection of the linkage, i tried some of the criterion and decided that the ‘complete’ method gives the best dendogram
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+# Run complete-linkage clustering method and plot the dendrogram 
+cc <- hclust(d, method = "complete")
+dend <- as.dendrogram(cc)
+ggdendrogram(dend,
+             labels=FALSE,
+             theme_dendro = FALSE)+
+  ggtitle('Dendogram of Hierarchical Clustering')
+```
+
+## Choosing the right amount of cluster 
+It looks like 5 cluster is appropriate for the above dendogram
+
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+dend1 <- dend %>% set("branches_k_color", 
+             value = c("palegreen","red4","skyblue","lightgoldenrod1","orchid"), 
+             k = 5)
+dend1 <- as.dendrogram(dend1)
+ggplot(dend1,
+       theme=NULL,
+       labels=FALSE)+ggtitle('Colored Dendogram of Hierarchical Clustering')
+```
+
+## Creating 5 Cluster
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+# Cut the dendrogram tree into 5 clusters
+cls <- cutree(cc,
+              k = 5)
+
+# Add cluster information to nodes
+nodes_with_clusters <- nodes %>%
+  mutate(cluster = cls)
+```
+
+## Calculate properties of each cluster
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+nodes_with_clusters %>%
+  # Group by cluster
+  group_by(cluster) %>%
+  # Calculate summary statistics
+  summarize(
+    # Number of nodes
+    size = n(), 
+    # Median degree
+    median_degree = median(degree),
+    # Median strength
+    median_strength = median(strength),
+    # Median closeness
+    median_closeness = median(closeness)
+  ) %>% 
+  # Arrange rows by decreasing size
+  arrange(desc(size))
+```
+
+## Each cluster charateristic
+
+```{r}
+nodes_with_clusters%>%ggplot(aes(x=degree))+geom_histogram()+ggtitle('Histogram of Degree')+facet_wrap(~cluster)
+nodes_with_clusters%>%ggplot(aes(x=strength))+geom_histogram()+ggtitle('Histogram of Strength')+facet_wrap(~cluster)
+```
+
+## Assign cluster to each vertex
+
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+V(g)$cluster <- nodes_with_clusters$cluster
+```
+
+# Interactive Visualization
+
+## Converting the graph data to visNetwork Data for Interactive visualization
+
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+data <- toVisNetworkData(g)
+
+# Print the head of the data nodes
+head(data$nodes)
+
+# ... do the same for the edges (ties)
+head(data$edges)
+```
+
+## Assign labels
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+nodes$id <- data$nodes$id
+nodes$label <- data$nodes$id
+nodes <- data$nodes
+edges <- data$edges
+```
+
+## Visualize the base network
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+visNetwork::visNetwork(nodes,
+                       edges,
+                       width = 1000,
+                       height = 1000)
+```
+
+## Adding strength value to the nodes
+Now the nodes size will vary according to it’s strength value
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+strength_value <- strength(g)
+nodes$value <- strength_value[match(nodes$id,
+                                    names(strength_value))]
+nodes$value <- strength_value
+```
+
+## Adding Visualization based on strength
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+visNetwork::visNetwork(nodes, 
+                       edges, 
+                       width = 1000,
+                       height = 1000)
+```
+
+## Adding Visualization based on edge betweenness
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+edges$value <- edge_betweenness(g)
+visNetwork::visNetwork(nodes,
+                       edges,
+                       width = 1000,
+                       height = 1000)
+```
+
+## Coloring by cluster
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+V(g)$color <- V(g)$cluster
+nodes$group <- data$nodes$cluster
+graph_crime_jelly <- visNetwork::visNetwork(nodes,
+                                            edges,
+                                            width = 1500,
+                                            height=1000)%>%
+  # Change options to select by group 
+  visOptions(selectedBy = "group",
+             highlightNearest = TRUE)
+graph_crime_jelly
+```
+
+
+## White background
+```{r message=FALSE, warning=FALSE}
+visSave(graph_crime_jelly,
+        'graph_crime_jelly.html',
+        selfcontained = TRUE)
+```
+
+## Black background
+```{r message=FALSE, warning=FALSE}
+visSave(graph_crime_jelly,
+        'graph_crime_jelly_black.html',
+        selfcontained = TRUE,
+        background = "black")
+```
+
+End of Notebook
